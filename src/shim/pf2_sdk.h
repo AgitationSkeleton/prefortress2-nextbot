@@ -22,7 +22,7 @@
 #include <tier1/convar.h>
 #include <tier1/fmtstr.h>
 #include <tier1/utlsymbol.h>
-#include <tier1/utlsortvector.h>
+#include <tier1/UtlSortVector.h>
 #include <tier1/utlstack.h>
 #include <mathlib/mathlib.h>
 #include <mathlib/vector.h>
