@@ -196,6 +196,7 @@ tag name).
 
 | Item | State |
 |---|---|
+| Linux requirements | the release `.so` needs glibc 2.34 or newer (built on Ubuntu 22.04; libstdc++ is linked statically) and the server's own `libtier0_srv.so` / `libvstdlib_srv.so` |
 | Linux runtime | the Linux build compiles and links against the same SDK libraries Metamod uses, and its vtable slots were read from PF2's `server.so`, but it **has not been run on a Linux PF2 server yet**. Please report results. |
 | Hibernation on Linux | `pf2nb_prevent_hibernation` is a no-op on Linux (it logs `hibernation control unsupported on Linux in this build`). The Windows implementation patches one instruction of `engine.dll` in memory after verifying a byte pattern; no Linux `engine.so` pattern has been verified. On Linux an empty server may hibernate and punt the bots until a human joins. |
 | `hunted_stonehenge_test` | partial: the VIP reaches and rides the lift, but no full bot-won round yet |

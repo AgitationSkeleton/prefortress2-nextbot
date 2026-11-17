@@ -70,7 +70,7 @@ LIBS = [os.path.join(SDK, "lib", "public", "%s.lib" % l) for l in ("mathlib", "t
 # Defines follow hl2sdk-manifests SdkHelpers (COMPILER_GCC _LINUX LINUX POSIX GNUC) plus the sdk2013
 # manifest's linux defines (NO_HOOK_MALLOC NO_MALLOC_OVERRIDE). stricmp & co. come from basetypes.h.
 LINUX_DEFINES = COMMON_DEFINES + "COMPILER_GCC _LINUX LINUX POSIX GNUC NO_HOOK_MALLOC NO_MALLOC_OVERRIDE".split()
-LINUX_CFLAGS = ["-c", "-m32", "-march=pentium4", "-msse2", "-mfpmath=sse", "-fPIC", "-std=gnu++17", "-O2", "-g",
+LINUX_CFLAGS = ["-c", "-m32", "-march=pentium4", "-msse2", "-mfpmath=sse", "-fPIC", "-std=gnu++17", "-O2", "-g", "-gdwarf-4",
                 "-fno-omit-frame-pointer", "-fno-strict-aliasing", "-fvisibility=hidden",
                 "-fvisibility-inlines-hidden", "-fno-threadsafe-statics", "-fdeclspec",
                 "-w"]   # Valve's 2013-era code is noisy under a modern compiler; the Windows build keeps /W3
