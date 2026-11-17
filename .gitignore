@@ -1,0 +1,12 @@
+build/
+deps/
+dist/
+tools/local.json
+*.secret
+*.mdmp
+*.bak*
+__pycache__/
+package/addons/pf2nextbot/bin/
+package/addons/pf2nextbot/nav/
+!package/addons/pf2nextbot/data/
+*.smx
