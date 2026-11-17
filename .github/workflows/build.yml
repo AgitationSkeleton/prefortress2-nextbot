@@ -25,11 +25,12 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    # Debian 11 (glibc 2.31) so the plugin runs on older server distributions too.
-    container: debian:bullseye
+    # Ubuntu 22.04 (glibc 2.35) so the plugin also runs on older server distributions.
+    container: ubuntu:22.04
     steps:
       - name: Install toolchain
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           dpkg --add-architecture i386
           apt-get update
           apt-get install -y --no-install-recommends clang g++-multilib python3 git ca-certificates curl file binutils libc6:i386
