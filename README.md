@@ -59,6 +59,7 @@ Requirements: a PF2 dedicated server with **Metamod:Source 1.11 or 1.12** (plugi
        addons/pf2nextbot/data/hunted.cfg                hunted/VIP map rules (editable)
        addons/pf2nextbot/data/ladders.cfg               ladder volumes per map
        addons/sourcemod/plugins/pf2_hunted_classrestrict.smx      optional, see below
+       addons/sourcemod/plugins/pf2_spawnfix.smx                  optional, see below
        addons/sourcemod/configs/hunted_classrestrict.cfg          optional, see below
        cfg/pf2nextbot.example.cfg                       example settings
 
@@ -87,8 +88,17 @@ writes game files; the Windows hibernation change lives in memory only.
 plugin that enforces the class rules of PF2's hunted/VIP maps for **human** players, derived at map start
 from the map's caged spawns (spawn points inside a damaging `trigger_hurt`), the same evidence the bot
 rules in `hunted.cfg` come from. It needs SourceMod 1.11+ and is not required by the bots. Install it only
-if you want those rules enforced for humans; delete the two `addons/sourcemod/...` files otherwise. See
-[sourcemod/README.md](sourcemod/README.md).
+if you want those rules enforced for humans; delete `pf2_hunted_classrestrict.smx` and
+`hunted_classrestrict.cfg` otherwise. See [sourcemod/README.md](sourcemod/README.md).
+
+### Optional: Civilian spawn fix SourceMod plugin
+
+`pf2_spawnfix.smx` (also in [`sourcemod/`](sourcemod/)) works around a PF2 engine bug, unrelated to the
+bots, that spawns players (in practice Civilians) in the **enemy** team's spawn room on maps whose spawns
+mark "all classes" as `spawnflags 511`, which leaves out the Civilian (class 10). It lets the Civilian use
+those spawns and moves anyone who still lands on another team's spawn back to their own. Try it with
+`sm_spawnfix_enabled 2` (log only) first; delete `pf2_spawnfix.smx` if you do not want it. See
+[sourcemod/README.md](sourcemod/README.md#pf2_spawnfix).
 
 ## Configuration
 
@@ -186,7 +196,7 @@ COMPILER_GCC`, `-m32`, link `mathlib.a`, `tier1.a`, `libtier0_srv.so`, `libvstdl
 the Linux binary exports only `CreateInterface` and links libstdc++/libgcc statically.
 
 To package a release layout locally (after building the plugin and the `.smx`):
-`python3 tools/package.py plugin <version> windows|linux --smx <path-to-smx>`.
+`python3 tools/package.py plugin <version> windows|linux --smx <classrestrict.smx> --spawnfix-smx <spawnfix.smx>`.
 
 The GitHub Actions workflow (`.github/workflows/build.yml`) builds both platforms on every push and
 pull request and publishes a release with the zips when a `v*` tag is pushed (or on a manual run with a
