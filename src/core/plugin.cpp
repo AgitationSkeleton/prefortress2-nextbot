@@ -14,6 +14,7 @@
 #include <vphysics_interface.h>
 #include <toolframework/itoolentity.h>
 #include "game/pf2_offsets.h"
+#include "perf.h"
 
 SH_DECL_HOOK6(IServerGameDLL, LevelInit, SH_NOATTRIB, 0, bool, char const *, char const *, char const *, char const *, bool, bool);
 SH_DECL_HOOK3_void(IServerGameDLL, ServerActivate, SH_NOATTRIB, 0, edict_t *, int, int);
@@ -209,7 +210,11 @@ void PF2NextBotPlugin::Hook_GameFrame(bool simulating)
 {
 	pf2::PF2_InvalidateEntityCache();
 	pf2::Drivers_Frame();
-	pf2::BotManager_OnGameFrame(simulating);
+	{
+		perf::Scope s(perf::GAMEFRAME);
+		pf2::BotManager_OnGameFrame(simulating);
+	}
+	perf::EndFrame();
 	RETURN_META(MRES_IGNORED);
 }
 

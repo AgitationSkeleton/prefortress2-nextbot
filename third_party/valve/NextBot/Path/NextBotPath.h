@@ -1,3 +1,4 @@
+#include "core/perf.h"
 // NextBotPath.h
 // Encapsulate and manipulate a path through the world
 // Author: Michael Booth, February 2006
@@ -155,6 +156,7 @@ public:
 	template< typename CostFunctor >
 	bool Compute( INextBot *bot, CBaseCombatCharacter *subject, CostFunctor &costFunc, float maxPathLength = 0.0f, bool includeGoalIfPathFails = true )
 	{
+		perf::Scope _nbperf( perf::PATH );   // NBPERF
 		VPROF_BUDGET( "Path::Compute(subject)", "NextBot" );
 
 		Invalidate();
@@ -272,6 +274,7 @@ public:
 	template< typename CostFunctor >
 	bool Compute( INextBot *bot, const Vector &goal, CostFunctor &costFunc, float maxPathLength = 0.0f, bool includeGoalIfPathFails = true, bool requireGoalArea = false )
 	{
+		perf::Scope _nbperf( perf::PATH );   // NBPERF
 		VPROF_BUDGET( "Path::Compute(goal)", "NextBotSpiky" );
 
 		Invalidate();

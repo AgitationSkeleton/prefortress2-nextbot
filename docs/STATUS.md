@@ -44,7 +44,7 @@ the gate door plus the touch buttons that open it.
 | `hunted_actually_accurate_a1` | 7 BLU VIP escapes in 7 rounds over two sessions (~122-138 s), across team swaps |
 | `hunted_biblically_accurate_a3` | 6 BLU VIP escapes in a row (~119-153 s) |
 | `hunted_actually_accurate_a2`, `hunted_accurate` | same layout and rules |
-| `hunted_stonehenge_test` | partial: the VIP reaches the pillar and rides it up when the lift fires; no full round won yet (snags leaving BLU's base, deaths during the 15 s ascent) |
+| `hunted_stonehenge_test` | bots leave BLU's base and play the map: the VIP runs to the pillar, rides the lift and is teleported home, while bodyguards and RED fight across the map. Before 1.0.2, every bot stayed in BLU's spawn: the mesh linked the spawn ramp to the floor running under it, an impossible 236-unit "drop" that is now skipped (see Nav tooling). No full round (3 ascents) won yet in tests; the VIP still dies often on the way in 4 v 4 |
 
 Before these changes every hunted round ended in a RED timeout win.
 
@@ -77,6 +77,11 @@ types were re-derived from the binaries (see `src/shim/tf_shareddefs.h`).
   plus analysis from them (test servers only).
 * Saved meshes always go to `addons/pf2nextbot/nav` (`CNavMesh::GetFilename` is patched), never `maps/`.
 * `pf2nb_navat x y z [bot]`: nearest area to a point and whether a bot can reach it.
+* Impossible drops: at map load, every drop longer than a crouch-jump onto an area that runs under the upper one is
+  checked with world-only hull traces (step over the rim, fall, land near the lower area?). Drops that can't happen
+  are skipped by the path cost (`pf2nb_drops` lists them, `pf2nb_prune_drops 0` turns it off). Typical counts:
+  Stonehenge 2, ctf_2fort 4, hunted_actually_accurate_a1 1, plr_chariots 22, plr_pipeline_pf2 16.
+* `pf2nb_path <bot>`: the bot's current path segments (area, position, ground/drop/climb/ladder).
 * The released nav pack covers 163 of PF2's 164 maps (all but the `background01` menu backdrop).
 
 ## Linux

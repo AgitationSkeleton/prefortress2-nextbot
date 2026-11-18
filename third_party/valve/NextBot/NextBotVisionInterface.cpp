@@ -3,6 +3,7 @@
 // Author: Michael Booth, May 2006
 //========= Copyright Valve Corporation, All rights reserved. ============//
 
+#include "core/perf.h"
 #include "cbase.h"
 
 #include "nav.h"
@@ -540,6 +541,7 @@ void IVision::UpdateKnownEntities( void )
  */
 void IVision::Update( void )
 {
+	perf::Scope _nbperf( perf::VISION );   // NBPERF
 	VPROF_BUDGET( "IVision::Update", "NextBotExpensive" );
 
 /* This adds significantly to bot's reaction times

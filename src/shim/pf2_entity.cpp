@@ -24,9 +24,9 @@ static int s_aliveTick = -1;
 
 static void RefreshServerOnlyEntities()
 {
-	if (s_aliveTick == gpGlobals->tickcount || !servertools)
+	if (s_aliveTick == gpGlobals->framecount || !servertools)
 		return;
-	s_aliveTick = gpGlobals->tickcount;
+	s_aliveTick = gpGlobals->framecount;
 	memset(s_aliveRaw + MAX_EDICTS, 0, sizeof(void *) * (NUM_ENT_ENTRIES - MAX_EDICTS));
 	for (CBaseEntity *e = servertools->FirstEntity(); e; e = servertools->NextEntity(e))
 	{

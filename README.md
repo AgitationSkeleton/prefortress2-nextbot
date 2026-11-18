@@ -22,7 +22,7 @@ tree, so to the engine and to other plugins they are ordinary players.
 | Random Civilian | `tf_bot_civilian_chance`, capped per team, never on hunted/VIP maps |
 | Ladders | ladder volumes from the BSPs (`data/ladders.cfg`) become native nav ladders at map load |
 | Class restrictions | from `data/hunted.cfg` first, then learned per map (a class that spawns inside a damaging trigger or dies to the world right after spawning) |
-| Robustness | stuck recovery (jump, repath), one-way door avoidance, hot reload (`meta unload`/`load` with live bots), runtime check that the `PlayerRunCommand` hook fires (bot driving is disabled if it does not) |
+| Robustness | stuck recovery (jump, repath), one-way door avoidance, long drops that can't actually land on the area below are pruned from the nav mesh at map load (fixes bots that never left spawn on maps like Stonehenge), hot reload (`meta unload`/`load` with live bots), runtime check that the `PlayerRunCommand` hook fires (bot driving is disabled if it does not) |
 | Hibernation (Windows) | `pf2nb_prevent_hibernation 1` keeps an empty server simulating so bots can fill it |
 
 See [docs/STATUS.md](docs/STATUS.md) for what was verified and how, and the known gaps.
@@ -139,10 +139,17 @@ PF2-specific cvars:
 | `pf2nb_unstick_jump` | 1 | bots stuck on the ground for 2+ s jump |
 | `pf2nb_bad_connection_time` | 60 | seconds a mesh connection bots got stuck on is avoided (doubles per repeat, max 600; 0 = off) |
 | `pf2nb_door_block_time` | 30 | how long a one-way door that never opens is blocked for pathing |
+| `pf2nb_prune_drops` | 1 | at map load, stop bots using drop connections whose fall can't reach the lower area |
 | `pf2nb_debug` | 0 | extra logging |
 
 Diagnostics: `pf2nb_status` (bots, behavior stacks, hook state), `pf2nb_navinfo` (nav mesh and TF
-decoration), `pf2nb_navat x y z [bot]`, `pf2nb_cpinfo`, `pf2nb_ents <pattern>`, `pf2nb_trace <bot>`.
+decoration), `pf2nb_navat x y z [bot]`, `pf2nb_cpinfo`, `pf2nb_ents <pattern>`, `pf2nb_trace <bot>`, `pf2nb_path <bot>` (the bot's current
+path, segment by segment), `pf2nb_drops` (re-check the mesh's long drops and list the ones bots skip).
+
+`pf2nb_perf [reset]` profiles server frames since the last reset: frame time, and the plugin's own
+time split into bot movement, bot thinking, path searches and vision. Use it to tell bot load apart
+from other server stutter. With 22 bots, 1.0.2's caching cut average path-search time from 2.0 to
+0.18 ms, and frames where bot thinking took over 20 ms from 550 to 7 in a test run.
 
 `addons/pf2nextbot/data/hunted.cfg` and `ladders.cfg` are generated from the map BSPs by
 `tools/hunted_rules.py` and `tools/ladders.py` and can be edited by hand.

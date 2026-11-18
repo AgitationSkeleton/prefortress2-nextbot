@@ -14,6 +14,7 @@
 #include "NextBotManager.h"
 #include "bot/tf_bot.h"
 #include "bot/tf_bot_manager.h"
+#include "perf.h"
 #include "pf2_grenades.h"
 #include "pf2_support.h"
 #include "behaviors/pf2_hunted.h"
@@ -27,6 +28,8 @@ extern const char *GetRandomBotName(void);
 void PF2NB_StartStats();
 void PF2NB_DoorsFrame();
 void PF2NB_DoorsReset();
+void PF2NB_PruneDrops();
+void PF2NB_ForgetDrops();
 void PF2_RefreshControlPointMasters();
 void PF2NB_HazardsFrame();
 void PF2NB_HazardsReset();
@@ -77,8 +80,12 @@ public:
 	{
 		if (!pf2nb_enable.GetBool() || !m_bot->IsAlive() || !s_navLoaded)
 			return;   // dead: leave PF2's own puppet logic in charge (it presses jump to respawn)
+		double t0 = Plat_FloatTime();
 		m_bot->UpdateLastKnownArea();
 		m_bot->PhysicsSimulate();
+		double dt = Plat_FloatTime() - t0;
+		perf::Add(perf::THINK, dt);
+		perf::MaxOf(perf::THINK_MAX_BOT, dt);
 		CUserCmd built;
 		if (!m_bot->TakePendingCmd(&built))
 			return;
@@ -489,6 +496,7 @@ void BotManager_OnServerActivate()
 		{
 			TheNavMesh->OnServerActivate();
 			PF2Hunted_LoadForMap(STRING(gpGlobals->mapname));
+			::PF2NB_PruneDrops();   // after the per-map ladders are in
 		}
 		PF2NB_Log("nav mesh for %s: %s (%d areas)", STRING(gpGlobals->mapname), s_navLoaded ? "loaded" : "NOT AVAILABLE, bots disabled on this map",
 			s_navLoaded ? TheNavMesh->GetNavAreaCount() : 0);
@@ -523,6 +531,7 @@ void BotManager_OnLevelShutdown()
 	TheTFBots().LevelShutdown();
 	::PF2NB_DoorsReset();
 	::PF2NB_HazardsReset();
+	::PF2NB_ForgetDrops();
 	ResetClassLearning();
 	PF2_ResetProxies();
 	if (TheNavMesh)
@@ -549,6 +558,7 @@ void BotManager_OnGameFrame(bool simulating)
 		// the old areas are gone: forget door/hazard blocks without touching them
 		::PF2NB_DoorsReset();
 		::PF2NB_HazardsReset();
+		::PF2NB_ForgetDrops();
 		// keep the generator stepping even with no mesh loaded (s_navLoaded false) or no bots (not simulating)
 		PF2_InvalidateEntityCache();
 		TheNavMesh->Update();
@@ -884,6 +894,29 @@ CON_COMMAND(pf2nb_trace, "pf2nb_trace <entindex> - sweep a player hull from the 
 	PF2NB_Log("eye line frac=%.2f hit=%s #%d", tr.fraction, hit ? hit->GetClassname() : "none", hit ? hit->entindex() : -1);
 }
 
+CON_COMMAND(pf2nb_path, "pf2nb_path <entindex> - print the bot's current path: segments (area, position, how it is traversed)")
+{
+	if (args.ArgC() < 2)
+		return;
+	int idx = atoi(args[1]);
+	CTFBot *bot = (idx >= 1 && idx <= PF2NB_MAXPLAYERS) ? s_bots[idx] : NULL;
+	const PathFollower *path = bot ? bot->GetCurrentPath() : NULL;
+	if (!path || !path->IsValid())
+	{
+		PF2NB_Log("no bot/path");
+		return;
+	}
+	static const char *types[] = { "ground", "drop", "climb", "gap", "ladder-up", "ladder-down" };
+	const Path::Segment *goal = path->GetCurrentGoal();
+	CNavArea *mine = bot->GetLastKnownArea();
+	PF2NB_Log("#%d at (%.0f %.0f %.0f) area %d", idx, bot->GetAbsOrigin().x, bot->GetAbsOrigin().y, bot->GetAbsOrigin().z,
+		mine ? mine->GetID() : -1);
+	int n = 0;
+	for (const Path::Segment *s = path->FirstSegment(); s && n < 40; s = path->NextSegment(s), ++n)
+		PF2NB_Log("  %s%2d area %5d (%.0f %.0f %.0f) %s", s == goal ? "*" : " ", n, s->area ? s->area->GetID() : -1, s->pos.x, s->pos.y, s->pos.z,
+			(s->type >= 0 && s->type < 6) ? types[s->type] : "?");
+}
+
 CON_COMMAND(pf2nb_ents, "pf2nb_ents <classname-pattern> [near-entindex radius] - list entities with origin/name/state")
 {
 	if (args.ArgC() < 2)
@@ -995,9 +1028,125 @@ ConVar pf2nb_bad_connection_time("pf2nb_bad_connection_time", "60", FCVAR_NONE, 
 struct BadConnection { unsigned int from, to; int team; float expire; int strikes; };
 static CUtlVector<BadConnection> s_badConnections;
 
+// Impossible drops. The generator links an area to a much lower one whenever their edges line up, also
+// where the drop is not open: hunted_stonehenge_test's spawn ramp (66) is linked west to the room
+// floor (13) that runs *under* the ramp, 236 units down. Paths took that "drop" (it is the shortest way
+// down), the bot stood at the ramp's edge waiting to fall and never did, so the VIP never left BLU's
+// spawn and the bodyguards escorting him stood with him. Each long drop onto an area that runs under
+// the upper one is checked once per map with world-only hull traces (doors and brush entities ignored):
+// step over the edge, fall, and see whether the fall ends near the lower area. A drop that lands nowhere
+// near it is skipped by CTFBotPathCost.
+ConVar pf2nb_prune_drops("pf2nb_prune_drops", "1", FCVAR_NONE, "At map load, drop connections whose fall cannot reach the lower area are not used by bots");
+static CUtlVector<uint64> s_impossibleDrops;   // sorted (from << 32 | to)
+
+static inline uint64 DropKey(unsigned int from, unsigned int to) { return ((uint64)from << 32) | to; }
+
+static bool IsImpossibleDrop(const CNavArea *from, const CNavArea *to)
+{
+	int lo = 0, hi = s_impossibleDrops.Count() - 1;
+	uint64 key = DropKey(from->GetID(), to->GetID());
+	while (lo <= hi)
+	{
+		int mid = (lo + hi) / 2;
+		if (s_impossibleDrops[mid] == key)
+			return true;
+		if (s_impossibleDrops[mid] < key)
+			lo = mid + 1;
+		else
+			hi = mid - 1;
+	}
+	return false;
+}
+
+// can a player standing at 'edge' (on 'from', at its rim toward 'dir') step off and fall into 'to'?
+static bool DropLandsIn(const CNavArea *from, const CNavArea *to, NavDirType dir, Vector edge)
+{
+	CTraceFilterWorldOnly world;
+	const Vector mins(-8, -8, 0), maxs(8, 8, 40);
+	edge.z = from->GetZ(edge);
+	Vector back = edge, over = edge;
+	AddDirectionVector(&back, dir, -16.0f);
+	AddDirectionVector(&over, dir, 16.0f + 1.0f);
+	back.z = from->GetZ(back) + StepHeight;
+	over.z = back.z;
+	trace_t tr;
+	UTIL_TraceHull(back, over, mins, maxs, MASK_PLAYERSOLID_BRUSHONLY, &world, &tr);
+	if (tr.startsolid || tr.fraction < 1.0f)
+		return false;   // a wall or railing at the rim
+	float zTo = to->GetZ(over);
+	UTIL_TraceHull(over, Vector(over.x, over.y, zTo - 8.0f), mins, maxs, MASK_PLAYERSOLID_BRUSHONLY, &world, &tr);
+	return tr.endpos.z <= zTo + StepHeight;   // landed on (or near) the lower area, not on something above it
+}
+
+static void PruneImpossibleDrops()
+{
+	s_impossibleDrops.RemoveAll();
+	if (!pf2nb_prune_drops.GetBool() || !TheNavMesh)
+		return;
+	int checked = 0;
+	FOR_EACH_VEC(TheNavAreas, it)
+	{
+		CNavArea *a = TheNavAreas[it];
+		for (int d = 0; d < NUM_DIRECTIONS; ++d)
+		{
+			const NavConnectVector *adj = a->GetAdjacentAreas((NavDirType)d);
+			FOR_EACH_VEC(*adj, k)
+			{
+				CNavArea *b = (*adj)[k].area;
+				if (!b)
+					continue;
+				Vector centre;
+				float half;
+				a->ComputePortal(b, (NavDirType)d, &centre, &half);
+				if (a->GetZ(centre) - b->GetZ(centre) <= JumpCrouchHeight)
+					continue;   // walkable or a short hop down
+				// only a lower area that runs underneath this one (the generator linked a floor to the one
+				// below it); drops off a ledge across a gap - common on displacement terrain, where the traces
+				// below are not exact - are left alone
+				const Vector &an = a->GetCorner(NORTH_WEST), &as = a->GetCorner(SOUTH_EAST);
+				const Vector &bn = b->GetCorner(NORTH_WEST), &bs = b->GetCorner(SOUTH_EAST);
+				if (MIN(as.x, bs.x) - MAX(an.x, bn.x) < 16.0f || MIN(as.y, bs.y) - MAX(an.y, bn.y) < 16.0f)
+					continue;
+				++checked;
+				// the portal's middle and both ends (inset by a half hull); one open spot is enough
+				bool ok = false;
+				for (int s = -1; s <= 1 && !ok; ++s)
+				{
+					Vector p = centre;
+					float off = s * MAX(0.0f, half - 16.0f);
+					if (d == NORTH || d == SOUTH)
+						p.x += off;
+					else
+						p.y += off;
+					ok = DropLandsIn(a, b, (NavDirType)d, p);
+				}
+				if (!ok)
+					s_impossibleDrops.AddToTail(DropKey(a->GetID(), b->GetID()));
+			}
+		}
+	}
+	s_impossibleDrops.Sort([](const uint64 *l, const uint64 *r) { return *l < *r ? -1 : (*l > *r ? 1 : 0); });
+	PF2NB_Log("nav: %d drops onto a floor below checked, %d cannot be fallen through (bots will not use them; pf2nb_drops lists them)", checked, s_impossibleDrops.Count());
+}
+void PF2NB_PruneDrops() { PruneImpossibleDrops(); }
+CON_COMMAND(pf2nb_drops, "Re-check the nav mesh's long drops and list the ones bots will not use")
+{
+	if (!TheNavMesh || !TheNavMesh->IsLoaded())
+		return;
+	PF2_InvalidateEntityCache();
+	PruneImpossibleDrops();
+	for (uint64 k : s_impossibleDrops)
+		PF2NB_Log("   impossible drop %u -> %u", (unsigned int)(k >> 32), (unsigned int)(k & 0xffffffffu));
+}
+void PF2NB_ForgetDrops() { s_impossibleDrops.RemoveAll(); }
+
 bool PF2NB_IsBadConnection(const CNavArea *from, const CNavArea *to, int team)
 {
-	if (!from || !to || s_badConnections.Count() == 0)
+	if (!from || !to)
+		return false;
+	if (s_impossibleDrops.Count() && IsImpossibleDrop(from, to))
+		return true;
+	if (s_badConnections.Count() == 0)
 		return false;
 	unsigned int f = from->GetID(), t = to->GetID();
 	for (const BadConnection &b : s_badConnections)
