@@ -929,6 +929,13 @@ static void UnblockAreaID(unsigned int id, int team)
 }
 struct DoorBlock { EHANDLE door; int team; float expire; CUtlVector<unsigned int> areas; };
 static CUtlVector<DoorBlock *> s_doorBlocks;
+
+static bool DoorIsClosed(CBaseEntity *door)
+{
+	int *toggle = door->Field<int>("m_toggle_state");
+	int *propState = door->Field<int>("m_eDoorState");
+	return (toggle && *toggle == TS_AT_BOTTOM) || (propState && *propState == 0);
+}
 // a door that keeps failing for a team is blocked for longer each time (30, 60, 120, ... 600 s)
 struct DoorStrikes { EHANDLE door; int team; int strikes; };
 static CUtlVector<DoorStrikes> s_doorStrikes;
@@ -954,11 +961,20 @@ static void ClearDoorBlocks(bool all)
 	for (int i = s_doorBlocks.Count() - 1; i >= 0; --i)
 	{
 		DoorBlock *b = s_doorBlocks[i];
-		if (!all && gpGlobals->curtime < b->expire)
+		// a block is lifted when it expires, and as soon as the door opens: doors that are only shut for a
+		// while (hunted_actually_accurate's blublastdoor stays closed until setup ends) were otherwise avoided
+		// for up to minutes after opening (30 -> 60 -> 120 s strikes during setup), so BLU's bodyguards
+		// never left spawn, the gate stayed shut and the VIP waited in spawn for the whole round
+		CBaseEntity *door = b->door.Get();
+		if (!all && gpGlobals->curtime < b->expire && door && DoorIsClosed(door))
 			continue;
 		if (!all)
+		{
 			for (unsigned int id : b->areas)
 				UnblockAreaID(id, b->team);
+			if (door && pf2nb_debug.GetBool() && gpGlobals->curtime < b->expire)
+				PF2NB_Log("door %s '%s' opened; lifted its block for team %d", door->GetClassname(), STRING(door->GetEntityName()), b->team);
+		}
 		delete b;
 		s_doorBlocks.Remove(i);
 	}
@@ -1050,10 +1066,7 @@ static void CheckStuckAtDoors()
 				NoteBadConnection(bot->GetLastKnownArea(), goal->area, bot->GetTeamNumber(), const_cast<PathFollower *>(path));
 			continue;
 		}
-		int *toggle = door->Field<int>("m_toggle_state");
-		int *propState = door->Field<int>("m_eDoorState");
-		bool closed = (toggle && *toggle == TS_AT_BOTTOM) || (propState && *propState == 0);
-		if (!closed || IsDoorBlockedFor(door, bot->GetTeamNumber()))
+		if (!DoorIsClosed(door) || IsDoorBlockedFor(door, bot->GetTeamNumber()))
 			continue;
 		DoorBlock *b = new DoorBlock;
 		b->door = door;
