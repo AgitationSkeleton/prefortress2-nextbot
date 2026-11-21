@@ -17,7 +17,7 @@ tree, so to the engine and to other plugins they are ordinary players.
 | Control points, A/D, KOTH | native `CapturePoint` / `DefendPoint` behaviors |
 | Payload | push / guard / block; payload race (`plr_`): both teams push their own cart, blockers scale with the enemy cart's progress |
 | Arena and objectiveless maps (`dm_`, `tdm_`, ...) | roam: enemy spawn exits, a random reachable enemy, or a spot 500-2000 u away |
-| Hunted / VIP maps | per-map rules (allowed classes, VIP escape, gate buttons); exactly one BLU VIP (a bot steps down for a human Civilian); bodyguards climb ladders, press the gate buttons and escort |
+| Hunted / VIP maps | per-map rules (allowed classes, VIP escape, gate buttons); exactly one BLU VIP (a bot steps down for a human Civilian); bodyguards climb ladders, press the gate buttons and escort; the VIP stays with its bodyguards while the gate is shut and takes a route that varies per life; RED snipers roam vantage points near the VIP instead of lurking at spawn |
 | PF2 mechanics | armor pickups, medic syringe heal/cure/infect, engineer wrench armor repair, PF2 buildings (single teleporter object with entrance/exit mode, no-build zones), demoman remote pipe traps, pyro incendiary rocket, spy disguise/cloak, PF2 hand grenades (prime / hold / throw), PF2 conditions (concussion, caltrops/leg shots, gas, infection) |
 | Random Civilian | `tf_bot_civilian_chance`, capped per team, never on hunted/VIP maps |
 | Ladders | ladder volumes from the BSPs (`data/ladders.cfg`) become native nav ladders at map load |
@@ -60,6 +60,7 @@ Requirements: a PF2 dedicated server with **Metamod:Source 1.11 or 1.12** (plugi
        addons/pf2nextbot/data/ladders.cfg               ladder volumes per map
        addons/sourcemod/plugins/pf2_hunted_classrestrict.smx      optional, see below
        addons/sourcemod/plugins/pf2_spawnfix.smx                  optional, see below
+       addons/sourcemod/plugins/pf2_hunted_models.smx             optional, see below
        addons/sourcemod/configs/hunted_classrestrict.cfg          optional, see below
        cfg/pf2nextbot.example.cfg                       example settings
 
@@ -90,6 +91,15 @@ from the map's caged spawns (spawn points inside a damaging `trigger_hurt`), the
 rules in `hunted.cfg` come from. It needs SourceMod 1.11+ and is not required by the bots. Install it only
 if you want those rules enforced for humans; delete `pf2_hunted_classrestrict.smx` and
 `hunted_classrestrict.cfg` otherwise. See [sourcemod/README.md](sourcemod/README.md).
+
+### Optional: hunted models SourceMod plugin
+
+`pf2_hunted_models.smx` (source in [`sourcemod/`](sourcemod/scripting/)) keeps a hunted map's recoloured sniper
+model on the right players. hunted_actually_accurate_a1/a2 give RED snipers `models/player/sniper_ylw.mdl` with a
+spawn trigger, which misses fast class changes and never clears the model, so Civilians and others could end up
+looking like snipers. On the listed maps the plugin applies the model to RED snipers only, shortly after every spawn,
+class change and team change, and in a periodic sweep. Cvars: `sm_huntedmodels_enabled` (1), `sm_huntedmodels_maps`
+(`hunted_actually_accurate*`), `sm_huntedmodels_model` (`models/player/sniper_ylw.mdl`). It is independent of the bots.
 
 ### Optional: Civilian spawn fix SourceMod plugin
 
@@ -140,11 +150,14 @@ PF2-specific cvars:
 | `pf2nb_bad_connection_time` | 60 | seconds a mesh connection bots got stuck on is avoided (doubles per repeat, max 600; 0 = off) |
 | `pf2nb_door_block_time` | 30 | how long a one-way door that never opens is blocked for pathing |
 | `pf2nb_prune_drops` | 1 | at map load, stop bots using drop connections whose fall can't reach the lower area |
+| `pf2nb_prune_walls` | 1 | at map load, walk every mesh connection with a player hull and stop bots using those no player can cross (ledges too high to jump, railings, thin walls) |
 | `pf2nb_debug` | 0 | extra logging |
 
 Diagnostics: `pf2nb_status` (bots, behavior stacks, hook state), `pf2nb_navinfo` (nav mesh and TF
 decoration), `pf2nb_navat x y z [bot]`, `pf2nb_cpinfo`, `pf2nb_ents <pattern>`, `pf2nb_trace <bot>`, `pf2nb_path <bot>` (the bot's current
-path, segment by segment), `pf2nb_drops` (re-check the mesh's long drops and list the ones bots skip).
+path, segment by segment), `pf2nb_drops` (re-check the mesh's drops, walls and ledges and list the connections bots skip),
+`pf2nb_walk <from> <to>` (walk one connection and print the traces), `pf2nb_area <id>` (an area's extent, blocked state
+and connections), `pf2nb_debug_blocks <id>` (log whatever blocks that area).
 
 `pf2nb_perf [reset]` profiles server frames since the last reset: frame time, and the plugin's own
 time split into bot movement, bot thinking, path searches and vision. Use it to tell bot load apart

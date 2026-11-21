@@ -59,17 +59,17 @@ jobs:
           name=$(curl -fsSL "https://sm.alliedmods.net/smdrop/${SOURCEMOD_BRANCH}/sourcemod-latest-linux")
           curl -fsSL "https://sm.alliedmods.net/smdrop/${SOURCEMOD_BRANCH}/${name}" -o /tmp/sm.tar.gz
           mkdir -p /tmp/sm && tar -xzf /tmp/sm.tar.gz -C /tmp/sm
-          cp sourcemod/scripting/pf2_hunted_classrestrict.sp sourcemod/scripting/pf2_spawnfix.sp /tmp/sm/addons/sourcemod/scripting/
+          cp sourcemod/scripting/pf2_hunted_classrestrict.sp sourcemod/scripting/pf2_spawnfix.sp sourcemod/scripting/pf2_hunted_models.sp /tmp/sm/addons/sourcemod/scripting/
           cd /tmp/sm/addons/sourcemod/scripting
           # relative paths only, so the debug info in the .smx carries no build-machine paths
           if [ -x spcomp64 ]; then spc=./spcomp64; else spc=./spcomp; fi
-          for p in pf2_hunted_classrestrict pf2_spawnfix; do
+          for p in pf2_hunted_classrestrict pf2_spawnfix pf2_hunted_models; do
             $spc $p.sp -o$p.smx
             cp $p.smx "$GITHUB_WORKSPACE/out/"
           done
       - name: Check .smx for absolute paths
         run: |
-          python3 - out/pf2_hunted_classrestrict.smx out/pf2_spawnfix.smx <<'EOF'
+          python3 - out/pf2_hunted_classrestrict.smx out/pf2_spawnfix.smx out/pf2_hunted_models.smx <<'EOF'
           import re, struct, sys, zlib
           failed = False
           for path in sys.argv[1:]:
@@ -142,8 +142,8 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Package
         run: |
-          python3 tools/package.py plugin "${{ steps.v.outputs.version }}" windows --binary artifacts/windows/pf2nextbot.dll --smx artifacts/linux/pf2_hunted_classrestrict.smx --spawnfix-smx artifacts/linux/pf2_spawnfix.smx
-          python3 tools/package.py plugin "${{ steps.v.outputs.version }}" linux --binary artifacts/linux/pf2nextbot_i486.so --smx artifacts/linux/pf2_hunted_classrestrict.smx --spawnfix-smx artifacts/linux/pf2_spawnfix.smx
+          python3 tools/package.py plugin "${{ steps.v.outputs.version }}" windows --binary artifacts/windows/pf2nextbot.dll --smx artifacts/linux/pf2_hunted_classrestrict.smx --spawnfix-smx artifacts/linux/pf2_spawnfix.smx --models-smx artifacts/linux/pf2_hunted_models.smx
+          python3 tools/package.py plugin "${{ steps.v.outputs.version }}" linux --binary artifacts/linux/pf2nextbot_i486.so --smx artifacts/linux/pf2_hunted_classrestrict.smx --spawnfix-smx artifacts/linux/pf2_spawnfix.smx --models-smx artifacts/linux/pf2_hunted_models.smx
           ls -l dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

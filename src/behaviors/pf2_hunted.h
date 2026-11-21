@@ -41,6 +41,9 @@ public:
 private:
 	PathFollower m_path;
 	CountdownTimer m_repathTimer;
+	unsigned m_routeSeed = 0;   // per life: varies the route to the goal (see HuntedRouteCost)
+	CountdownTimer m_regroupWait;       // waiting for the team to catch up
+	CountdownTimer m_regroupCooldown;   // no more waiting until this runs out
 };
 
 class CTFBotPF2HuntedBodyguard : public Action<CTFBot>
@@ -55,4 +58,24 @@ private:
 	CountdownTimer m_repathTimer;
 	int m_button = -1;
 	int m_unreachable = 0;
+};
+
+// assassin snipers on hunted maps: move between vantage points 700-1800 units from the VIP (or from
+// the route to its goal), hold each for a while, and move on when the VIP is out of sight
+class CTFBotHuntedSniper : public Action<CTFBot>
+{
+public:
+	virtual ActionResult<CTFBot> OnStart(CTFBot *me, Action<CTFBot> *priorAction);
+	virtual ActionResult<CTFBot> Update(CTFBot *me, float interval);
+	virtual EventDesiredResult<CTFBot> OnStuck(CTFBot *me);
+	virtual const char *GetName(void) const { return "HuntedSniper"; }
+private:
+	bool PickSpot(CTFBot *me);
+	PathFollower m_path;
+	CountdownTimer m_repathTimer;
+	CountdownTimer m_holdTimer;     // how long to stay at the current spot
+	CountdownTimer m_travelTimer;   // give up on a spot that takes too long to reach
+	Vector m_spot;
+	bool m_haveSpot = false;
+	bool m_arrived = false;
 };

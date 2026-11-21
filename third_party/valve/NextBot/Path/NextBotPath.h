@@ -220,6 +220,14 @@ public:
 		
 		if ( count == 1 )
 		{
+			// PF2NB: the search failed and nothing beyond our own area gets closer. A straight line at a goal
+			// far away walks the bot into the wall facing it (bots sealed in a spawn by a mis-blocked door
+			// piled into the corner nearest the enemy flag, hopping); leave the path empty instead.
+			if ( !pathResult && ( subjectPos - bot->GetPosition() ).IsLengthGreaterThan( 300.0f ) )
+			{
+				Invalidate();
+				return false;
+			}
 			BuildTrivialPath( bot, subjectPos );
 			return pathResult;
 		}
@@ -349,6 +357,14 @@ public:
 		
 		if ( count == 1 )
 		{
+			// PF2NB: the search failed and nothing beyond our own area gets closer. A straight line at a goal
+			// far away walks the bot into the wall facing it (bots sealed in a spawn by a mis-blocked door
+			// piled into the corner nearest the enemy flag, hopping); leave the path empty instead.
+			if ( !pathResult && ( goal - bot->GetPosition() ).IsLengthGreaterThan( 300.0f ) )
+			{
+				Invalidate();
+				return false;
+			}
 			BuildTrivialPath( bot, goal );
 			return pathResult;
 		}

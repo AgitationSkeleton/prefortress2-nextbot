@@ -1,6 +1,7 @@
 // pf2-nextbot: PF2 hunted/VIP maps and per-map ladders. See pf2_hunted.h.
 #include "cbase.h"
 #include "pf2_hunted.h"
+#include "bot/behavior/sniper/tf_bot_sniper_attack.h"
 #include "nav_mesh.h"
 #include "nav_ladder.h"
 #include "tf_nav_mesh.h"
@@ -187,13 +188,152 @@ static Vector GoalPoint()
 
 Action<CTFBot> *PF2Hunted_ScenarioAction(CTFBot *me)
 {
-	if (!s_rules.active || !s_rules.hasGoal || me->GetTeamNumber() != TF_TEAM_BLUE)
+	if (!s_rules.active || !s_rules.hasGoal)
 		return NULL;
+	if (me->GetTeamNumber() != TF_TEAM_BLUE)
+		return me->IsPlayerClass(TF_CLASS_SNIPER) ? new CTFBotHuntedSniper : NULL;   // assassin snipers roam instead of lurking at spawn
 	if (me->IsPlayerClass(TF_CLASS_CIVILIAN))
 		return new CTFBotPF2HuntedVIP;
 	if (me->IsPlayerClass(TF_CLASS_MEDIC))
 		return NULL;   // medics keep TFBot's own heal behavior (they follow and heal the VIP's escort)
 	return new CTFBotPF2HuntedBodyguard;
+}
+
+static int HuntedVipTeam() { return TF_TEAM_BLUE; }
+
+// ---------------------------------------------------------------------------------------------
+// Route variety: scale the path cost by a per-life random factor for each 600-unit region, so
+// successive VIPs prefer different corridors to the goal (Stonehenge always went the same way)
+// ---------------------------------------------------------------------------------------------
+class HuntedRouteCost : public IPathCost
+{
+public:
+	HuntedRouteCost(CTFBot *me, unsigned seed) : m_base(me, SAFEST_ROUTE), m_seed(seed) {}
+	virtual float operator()(CNavArea *area, CNavArea *fromArea, const CNavLadder *ladder, const CFuncElevator *elevator, float length) const
+	{
+		float c = m_base(area, fromArea, ladder, elevator, length);
+		if (c < 0.0f || !fromArea)
+			return c;
+		float prev = fromArea->GetCostSoFar();
+		const Vector &p = area->GetCenter();
+		unsigned h = (unsigned)(int)floorf(p.x / 600.0f) * 73856093u ^ (unsigned)(int)floorf(p.y / 600.0f) * 19349663u ^ m_seed;
+		h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+		float k = 1.0f + 2.0f * (float)(h & 0xffff) / 65535.0f;   // 1 .. 3
+		return prev + (c - prev) * k;
+	}
+private:
+	CTFBotPathCost m_base;
+	unsigned m_seed;
+};
+
+// the VIP's nearest living teammate (bodyguards, medics), or NULL
+static CTFPlayer *NearestBodyguard(CTFBot *me, float *dist)
+{
+	CTFPlayer *best = NULL;
+	float bestD = FLT_MAX;
+	for (int i = 1; i <= gpGlobals->maxClients; ++i)
+	{
+		CTFPlayer *p = ToTFPlayer(UTIL_PlayerByIndex(i));
+		if (!p || p == me || !p->IsAlive() || p->GetTeamNumber() != me->GetTeamNumber() || p->IsPlayerClass(TF_CLASS_CIVILIAN))
+			continue;
+		float d = (p->GetAbsOrigin() - me->GetAbsOrigin()).Length();
+		if (d < bestD)
+		{
+			bestD = d;
+			best = p;
+		}
+	}
+	*dist = bestD;
+	return best;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Assassin snipers
+// ---------------------------------------------------------------------------------------------
+bool CTFBotHuntedSniper::PickSpot(CTFBot *me)
+{
+	CTFPlayer *vip = PF2Hunted_FindVIP(HuntedVipTeam());
+	Vector anchor = (vip && vip->IsAlive()) ? vip->GetAbsOrigin() : GoalPoint();
+	CNavArea *anchorArea = TheNavMesh->GetNearestNavArea(anchor, false, 500.0f);
+	CNavArea *fallback = NULL;
+	for (int tries = 0; tries < 60 && TheNavAreas.Count(); ++tries)
+	{
+		CNavArea *a = TheNavAreas[RandomInt(0, TheNavAreas.Count() - 1)];
+		if (a->IsBlocked(me->GetTeamNumber()) || a->IsUnderwater())
+			continue;
+		float d = (a->GetCenter() - anchor).Length();
+		if (d < 700.0f || d > 1800.0f)
+			continue;
+		if (!anchorArea || a->IsPotentiallyVisible(anchorArea))
+		{
+			m_spot = a->GetRandomPoint();
+			return true;
+		}
+		if (!fallback)
+			fallback = a;
+	}
+	if (!fallback)
+		return false;
+	m_spot = fallback->GetRandomPoint();
+	return true;
+}
+
+ActionResult<CTFBot> CTFBotHuntedSniper::OnStart(CTFBot *me, Action<CTFBot> *priorAction)
+{
+	m_path.SetMinLookAheadDistance(me->GetDesiredPathLookAheadRange());
+	m_haveSpot = false;
+	m_arrived = false;
+	return Continue();
+}
+
+ActionResult<CTFBot> CTFBotHuntedSniper::Update(CTFBot *me, float interval)
+{
+	if (!s_rules.active || !s_rules.hasGoal)
+		return Done("Not a hunted map");
+	// a target in sight: TFBot's sniper attack (zoom, aim, fire), then back to roaming
+	if (CTFBotSniperAttack::IsPossible(me))
+		return SuspendFor(new CTFBotSniperAttack, "Sniping a target");
+	if (!m_haveSpot || (m_arrived && m_holdTimer.IsElapsed()) || (!m_arrived && m_travelTimer.IsElapsed()))
+	{
+		m_haveSpot = PickSpot(me);
+		m_arrived = false;
+		m_travelTimer.Start(25.0f);
+		m_repathTimer.Invalidate();
+		if (!m_haveSpot)
+			return Continue();
+	}
+	if (!m_arrived)
+	{
+		if ((me->GetAbsOrigin() - m_spot).AsVector2D().IsLengthLessThan(60.0f))
+		{
+			m_arrived = true;
+			m_holdTimer.Start(RandomFloat(12.0f, 20.0f));
+		}
+		else
+		{
+			if (m_repathTimer.IsElapsed())
+			{
+				m_repathTimer.Start(RandomFloat(1.0f, 2.0f));
+				CTFBotPathCost cost(me, FASTEST_ROUTE);
+				if (!m_path.Compute(me, m_spot, cost))
+					m_haveSpot = false;   // unreachable: pick another next time
+			}
+			m_path.Update(me);
+			return Continue();
+		}
+	}
+	// hold the spot, watching the VIP's side (attacking is the main action's job)
+	me->GetLocomotionInterface()->Stop();
+	CTFPlayer *vip = PF2Hunted_FindVIP(HuntedVipTeam());
+	Vector look = (vip && vip->IsAlive()) ? vip->WorldSpaceCenter() : GoalPoint() + Vector(0, 0, 40);
+	me->GetBodyInterface()->AimHeadTowards(look, IBody::INTERESTING, 0.5f, NULL, "Watching for the VIP");
+	return Continue();
+}
+
+EventDesiredResult<CTFBot> CTFBotHuntedSniper::OnStuck(CTFBot *me)
+{
+	m_haveSpot = false;
+	return TryContinue();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -203,6 +343,7 @@ ActionResult<CTFBot> CTFBotPF2HuntedVIP::OnStart(CTFBot *me, Action<CTFBot> *pri
 {
 	m_path.SetMinLookAheadDistance(me->GetDesiredPathLookAheadRange());
 	m_repathTimer.Invalidate();
+	m_routeSeed = (unsigned)RandomInt(1, 0x7fffffff);
 	return Continue();
 }
 
@@ -227,7 +368,21 @@ ActionResult<CTFBot> CTFBotPF2HuntedVIP::Update(CTFBot *me, float interval)
 
 	if (!PF2Hunted_GateOpen())
 	{
-		// wait for the bodyguards to open the way; watch for assassins meanwhile
+		// the bodyguards are opening the way: stay with them rather than waiting alone at the spawn
+		float d;
+		CTFPlayer *guard = NearestBodyguard(me, &d);
+		if (guard && d > 200.0f)
+		{
+			if (m_repathTimer.IsElapsed())
+			{
+				m_repathTimer.Start(1.0f);
+				CTFBotPathCost cost(me, FASTEST_ROUTE);
+				m_path.Compute(me, guard->GetAbsOrigin(), cost);
+			}
+			m_path.Update(me);
+		}
+		else
+			me->GetLocomotionInterface()->Stop();
 		me->UpdateLookingAroundForIncomingPlayers(true);
 		return Continue();
 	}
@@ -249,10 +404,32 @@ ActionResult<CTFBot> CTFBotPF2HuntedVIP::Update(CTFBot *me, float interval)
 		return Continue();
 	}
 
+	// don't run off alone: when far ahead of the nearest bodyguard (who is further from the goal), wait
+	// for a few seconds for the team to catch up - never walk back (a bodyguard holding a spot near the
+	// spawn would pull the VIP to and fro) - then carry on and don't wait again for a while
+	float guardDist;
+	CTFPlayer *guard = NearestBodyguard(me, &guardDist);
+	bool ahead = guard && guardDist > 900.0f && (goal - me->GetAbsOrigin()).IsLengthGreaterThan(600.0f) &&
+		(goal - guard->GetAbsOrigin()).Length() > (goal - me->GetAbsOrigin()).Length();
+	if (ahead && m_regroupCooldown.IsElapsed())
+	{
+		if (!m_regroupWait.HasStarted())
+			m_regroupWait.Start(8.0f);
+		if (!m_regroupWait.IsElapsed())
+		{
+			me->GetLocomotionInterface()->Stop();
+			me->UpdateLookingAroundForIncomingPlayers(true);
+			return Continue();
+		}
+		m_regroupWait.Invalidate();
+		m_regroupCooldown.Start(20.0f);
+	}
+	else if (!ahead)
+		m_regroupWait.Invalidate();
 	if (m_repathTimer.IsElapsed())
 	{
 		m_repathTimer.Start(1.0f);
-		CTFBotPathCost cost(me, SAFEST_ROUTE);
+		HuntedRouteCost cost(me, m_routeSeed);
 		m_path.Compute(me, goal, cost);
 	}
 	m_path.Update(me);

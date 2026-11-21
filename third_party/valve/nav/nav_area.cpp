@@ -4655,6 +4655,14 @@ void CNavArea::MarkAsBlocked( int teamID, CBaseEntity *blocker, bool bGenerateEv
 		m_attributeFlags |= NAV_MESH_NAV_BLOCKER;
 	}
 
+	// PF2NB: pf2nb_debug_blocks <area id> logs who blocks that area (0 = off)
+	{
+		static ConVarRef dbgBlocks( "pf2nb_debug_blocks" );
+		if ( dbgBlocks.IsValid() && dbgBlocks.GetInt() == (int)GetID() )
+			Msg( "[PF2NB] area %u MarkAsBlocked team %d by #%d %s '%s'\n", GetID(), teamID, blocker ? blocker->entindex() : -1,
+				blocker ? blocker->GetClassname() : "-", blocker ? STRING( blocker->GetEntityName() ) : "" );
+	}
+
 	bool wasBlocked = false;
 	if ( teamID == TEAM_ANY )
 	{

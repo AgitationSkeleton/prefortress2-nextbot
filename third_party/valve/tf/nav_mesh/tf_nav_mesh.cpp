@@ -768,6 +768,13 @@ void CTFNavMesh::ComputeBlockedAreas( void )
 		{
 			triggerExtent.Init( trigger );
 
+			// PF2NB: door triggers often stop short of their door (ctf_2fort_classic_pf2's spawn doors: an 18 unit
+			// gap). Without a margin such a door counts as an untriggered wall and its areas are blocked for every
+			// team, sealing the owning team inside its spawn (their paths then fail and they run a trivial path
+			// into the spawn corner nearest the goal).
+			triggerExtent.lo -= Vector( 32.0f, 32.0f, 32.0f );
+			triggerExtent.hi += Vector( 32.0f, 32.0f, 32.0f );
+
 			// just check overlapping, not encompassing, since some door triggers only are player height tall (cp_gravelpit)
 			if ( triggerExtent.IsOverlapping( doorExtent ) )
 			{

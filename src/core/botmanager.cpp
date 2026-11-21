@@ -39,6 +39,7 @@ ConVar tf_bot_civilian_chance("tf_bot_civilian_chance", "10", FCVAR_NONE,
 	"Percent chance a TFBot picks Civilian when choosing a class (only if pf_allow_special_class is 1, never on hunted/VIP maps)", true, 0, true, 100);
 ConVar tf_bot_civilian_max_per_team("tf_bot_civilian_max_per_team", "1", FCVAR_NONE, "Most Civilian bots per team (random Civilian)");
 ConVar pf2nb_debug("pf2nb_debug", "0", FCVAR_NONE, "Log PF2 NextBot glue activity");
+ConVar pf2nb_debug_blocks("pf2nb_debug_blocks", "0", FCVAR_NONE, "Log every MarkAsBlocked on this nav area id (0 = off)");
 ConVar pf2nb_unstick_jump("pf2nb_unstick_jump", "1", FCVAR_NONE, "Bots stuck on the ground for 2+ seconds jump (steps the nav mesh does not mark as jumps)");
 
 namespace pf2 { const char *Hibernation_Set(bool preventHibernation); }
@@ -687,6 +688,45 @@ public:
 static PF2NBStats s_stats;
 void PF2NB_StartStats() { s_stats.Start(); }
 
+bool PF2NB_IsBadConnection(const CNavArea *from, const CNavArea *to, int team);
+CON_COMMAND(pf2nb_area, "pf2nb_area <id>: nav area extent, attributes, blocked state per team and its connections")
+{
+	if (args.ArgC() < 2 || !TheNavMesh)
+		return;
+	CTFNavArea *a = (CTFNavArea *)TheNavMesh->GetNavAreaByID(atoi(args[1]));
+	if (!a)
+	{
+		Msg("[PF2NB] no area %s\n", args[1]);
+		return;
+	}
+	Extent e;
+	a->GetExtent(&e);
+	Msg("[PF2NB] area %u (%.0f %.0f %.0f)-(%.0f %.0f %.0f) attr=0x%x anyTF=%d blocked blue=%d red=%d\n", a->GetID(), e.lo.x, e.lo.y, e.lo.z,
+		e.hi.x, e.hi.y, e.hi.z, a->GetAttributes(), (a->HasAttributeTF(0xFFFFFFFF) ? 1 : 0), a->IsBlocked(TF_TEAM_BLUE), a->IsBlocked(TF_TEAM_RED));
+	{
+		// repeat CNavArea::UpdateBlocked's trace and name what it starts solid in
+		Vector origin = a->GetCenter();
+		origin.z += HalfHumanHeight;
+		float sx = MAX(1, MIN(a->GetSizeX() / 2 - 5, HalfHumanWidth)), sy = MAX(1, MIN(a->GetSizeY() / 2 - 5, HalfHumanWidth));
+		CTraceFilterWalkableEntities filter(NULL, COLLISION_GROUP_PLAYER_MOVEMENT, WALK_THRU_DOORS | WALK_THRU_BREAKABLES);
+		trace_t tr;
+		UTIL_TraceHull(origin, origin, Vector(-sx, -sy, 0), Vector(sx, sy, VEC_DUCK_HULL_MAX.z - HalfHumanHeight), MASK_NPCSOLID_BRUSHONLY, &filter, &tr);
+		Msg("   block trace: startsolid=%d ent=#%d %s '%s'\n", tr.startsolid ? 1 : 0, tr.m_pEnt ? tr.m_pEnt->entindex() : -1,
+			tr.m_pEnt ? tr.m_pEnt->GetClassname() : "-", tr.m_pEnt ? STRING(tr.m_pEnt->GetEntityName()) : "");
+	}
+	static const char *dirs[] = { "N", "E", "S", "W" };
+	for (int d = 0; d < NUM_DIRECTIONS; ++d)
+	{
+		const NavConnectVector *c = a->GetAdjacentAreas((NavDirType)d);
+		FOR_EACH_VEC((*c), i)
+		{
+			CNavArea *b = c->Element(i).area;
+			Msg("   %s -> %u (%.0f %.0f %.0f)%s\n", dirs[d], b->GetID(), b->GetCenter().x, b->GetCenter().y, b->GetCenter().z,
+				b->IsConnected(a, NUM_DIRECTIONS) ? "" : " one-way", PF2NB_IsBadConnection(a, b, TEAM_ANY) ? " IMPOSSIBLE" : "");
+		}
+	}
+}
+
 CON_COMMAND(pf2nb_navat, "pf2nb_navat x y z [botidx]: nearest nav area to a point; with a bot, whether a path reaches it")
 {
 	if (!TheNavMesh || !s_navLoaded || args.ArgC() < 4)
@@ -719,7 +759,7 @@ CON_COMMAND(pf2nb_navat, "pf2nb_navat x y z [botidx]: nearest nav area to a poin
 		}
 		CNavArea *closest = NULL;
 		ShortestPathCost cost;
-		bool ok = NavAreaBuildPath(from, a, &p, cost, &closest);
+		bool ok = NavAreaBuildPath(from, a, &p, cost, &closest, 0.0f, bot->GetTeamNumber());   // blocked areas: as for the bot's team
 		Vector cc = closest ? closest->GetCenter() : vec3_origin;
 		PF2NB_Log("from area %d: %s; closest area %d (%.0f %.0f %.0f)", from->GetID(), ok ? "REACHABLE" : "unreachable",
 			closest ? closest->GetID() : -1, cc.x, cc.y, cc.z);
@@ -1078,12 +1118,80 @@ static bool DropLandsIn(const CNavArea *from, const CNavArea *to, NavDirType dir
 	return tr.endpos.z <= zTo + StepHeight;   // landed on (or near) the lower area, not on something above it
 }
 
+// Walk a connection with a player hull (world geometry only; doors and props open or move): from
+// 'from' at its rim, across the portal into 'to'. Covers what the generator links but a player cannot do:
+// railings and thin walls between two floors, ledges too high to jump, low ceilings over a step.
+static bool s_walkDebug = false;
+static bool WalkCrosses(const CNavArea *from, const CNavArea *to, NavDirType dir, Vector edge);
+CON_COMMAND(pf2nb_walk, "pf2nb_walk <from-area> <to-area>: walk one nav connection with a player hull and print the traces")
+{
+	if (args.ArgC() < 3 || !TheNavMesh)
+		return;
+	CNavArea *a = TheNavMesh->GetNavAreaByID(atoi(args[1])), *b = TheNavMesh->GetNavAreaByID(atoi(args[2]));
+	if (!a || !b)
+		return;
+	for (int d = 0; d < NUM_DIRECTIONS; ++d)
+		if (a->IsConnected(b, (NavDirType)d))
+		{
+			Vector c;
+			float half;
+			a->ComputePortal(b, (NavDirType)d, &c, &half);
+			PF2NB_Log("connection %u -> %u dir %d portal (%.0f %.0f %.0f) half %.0f zFrom %.0f zTo %.0f", a->GetID(), b->GetID(), d, c.x, c.y, c.z, half, a->GetZ(c), b->GetZ(c));
+			s_walkDebug = true;
+			for (int s = -1; s <= 1; ++s)
+			{
+				Vector p = c;
+				float off = s * MAX(0.0f, half - 16.0f);
+				if (d == NORTH || d == SOUTH) p.x += off; else p.y += off;
+				PF2NB_Log("  sample %d: %s", s, WalkCrosses(a, b, (NavDirType)d, p) ? "crosses" : "BLOCKED");
+			}
+			s_walkDebug = false;
+		}
+}
+
+static bool WalkCrosses(const CNavArea *from, const CNavArea *to, NavDirType dir, Vector edge)
+{
+	CTraceFilterWorldOnly world;
+	edge.z = from->GetZ(edge);
+	Vector back = edge, over = edge;
+	// a railing or thin wall the generator linked across sits on the portal; a short crossing finds it and
+	// keeps the hull clear of walls running alongside (areas extend half a sample step past valid spots)
+	AddDirectionVector(&back, dir, -12.0f);
+	AddDirectionVector(&over, dir, 12.0f);
+	float zFrom = from->GetZ(back), zTo = to->GetZ(over);
+	float dz = zTo - zFrom;
+	if (dz > JumpCrouchHeight + 2.0f)
+		return false;   // no jump reaches it (ladders are separate connections)
+	// a narrow hull (as for drops): walls running alongside a narrow portal must not count, railings and
+	// thin walls across it still do
+	const Vector mins(-8, -8, 0), maxs(8, 8, HumanCrouchHeight - StepHeight);
+	trace_t tr;
+	float startZ = zFrom + StepHeight;
+	if (dz > StepHeight)
+	{
+		// a jump: room to get up from our floor to a step above the target floor
+		float topZ = zTo + StepHeight;
+		UTIL_TraceHull(Vector(back.x, back.y, startZ), Vector(back.x, back.y, topZ), mins, maxs, MASK_PLAYERSOLID_BRUSHONLY, &world, &tr);
+		if (s_walkDebug) PF2NB_Log("    jump trace (%.0f %.0f %.0f)->z %.0f: startsolid %d frac %.2f ent #%d", back.x, back.y, startZ, topZ, tr.startsolid, tr.fraction, tr.m_pEnt ? ((CBaseEntity *)tr.m_pEnt)->entindex() : -1);
+		if (tr.startsolid || tr.fraction < 1.0f)
+			return false;
+		startZ = topZ;
+	}
+	// across, a step above the higher floor (follows rising slopes and stairs; going down we fall after the rim)
+	UTIL_TraceHull(Vector(back.x, back.y, startZ), Vector(over.x, over.y, MAX(zTo, zFrom) + StepHeight), mins, maxs,
+		MASK_PLAYERSOLID_BRUSHONLY, &world, &tr);
+	if (s_walkDebug) PF2NB_Log("    walk trace (%.0f %.0f %.0f)->(%.0f %.0f): startsolid %d frac %.2f normal (%.2f %.2f %.2f)", back.x, back.y, startZ, over.x, over.y, tr.startsolid, tr.fraction, tr.plane.normal.x, tr.plane.normal.y, tr.plane.normal.z);
+	return !tr.startsolid && tr.fraction >= 1.0f;
+}
+
+ConVar pf2nb_prune_walls("pf2nb_prune_walls", "1", FCVAR_NONE, "At map load, connections a player hull cannot walk or jump across (railings, thin walls, ledges too high) are not used by bots");
+
 static void PruneImpossibleDrops()
 {
 	s_impossibleDrops.RemoveAll();
 	if (!pf2nb_prune_drops.GetBool() || !TheNavMesh)
 		return;
-	int checked = 0;
+	int checked = 0, checkedWalls = 0, walls = 0;
 	FOR_EACH_VEC(TheNavAreas, it)
 	{
 		CNavArea *a = TheNavAreas[it];
@@ -1099,7 +1207,29 @@ static void PruneImpossibleDrops()
 				float half;
 				a->ComputePortal(b, (NavDirType)d, &centre, &half);
 				if (a->GetZ(centre) - b->GetZ(centre) <= JumpCrouchHeight)
-					continue;   // walkable or a short hop down
+				{
+					// walkable, a step, a jump up or a short hop down: walk it with a hull
+					if (!pf2nb_prune_walls.GetBool() || half < 1.0f || a->IsUnderwater() || b->IsUnderwater())
+						continue;   // swimming crosses heights a walking hull cannot
+					++checkedWalls;
+					bool ok = false;
+					for (int s = -1; s <= 1 && !ok; ++s)
+					{
+						Vector p = centre;
+						float off = s * MAX(0.0f, half - 16.0f);
+						if (d == NORTH || d == SOUTH)
+							p.x += off;
+						else
+							p.y += off;
+						ok = WalkCrosses(a, b, (NavDirType)d, p);
+					}
+					if (!ok)
+					{
+						s_impossibleDrops.AddToTail(DropKey(a->GetID(), b->GetID()));
+						++walls;
+					}
+					continue;
+				}
 				// only a lower area that runs underneath this one (the generator linked a floor to the one
 				// below it); drops off a ledge across a gap - common on displacement terrain, where the traces
 				// below are not exact - are left alone
@@ -1126,7 +1256,8 @@ static void PruneImpossibleDrops()
 		}
 	}
 	s_impossibleDrops.Sort([](const uint64 *l, const uint64 *r) { return *l < *r ? -1 : (*l > *r ? 1 : 0); });
-	PF2NB_Log("nav: %d drops onto a floor below checked, %d cannot be fallen through (bots will not use them; pf2nb_drops lists them)", checked, s_impossibleDrops.Count());
+	PF2NB_Log("nav: %d drops onto a floor below checked, %d walk/jump connections checked; %d impossible (%d walls/ledges), bots will not use them; pf2nb_drops lists them",
+		checked, checkedWalls, s_impossibleDrops.Count(), walls);
 }
 void PF2NB_PruneDrops() { PruneImpossibleDrops(); }
 CON_COMMAND(pf2nb_drops, "Re-check the nav mesh's long drops and list the ones bots will not use")
@@ -1291,6 +1422,11 @@ static void ScanHazards()
 			continue;
 		Extent ext;
 		e->CollisionProp()->WorldSpaceAABB(&ext.lo, &ext.hi);
+		// map-wide kill volumes (hunted maps kill the losing team at round end: Stonehenge's
+		// trigger_hurt_civ_failed_to_ascend covers the whole map) cannot be avoided; blocking them blocked
+		// every area for that team, so its bots stood still
+		if ((ext.hi - ext.lo).AsVector2D().IsLengthGreaterThan(6000.0f))
+			continue;
 		ext.lo.z -= HalfHumanHeight;
 		ext.hi.z -= 4.0f;   // floors resting exactly on a hurt volume's top face (Stonehenge's water) stay usable
 		CBaseEntity *filter = e->HandleField("m_hFilter");

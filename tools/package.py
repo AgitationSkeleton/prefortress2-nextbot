@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the release zips (drop-in layout for the PF2 game directory).
 
-  python tools/package.py plugin <version> <windows|linux> [--binary PATH] [--smx PATH] [--spawnfix-smx PATH] [--out DIR]
+  python tools/package.py plugin <version> <windows|linux> [--binary PATH] [--smx PATH] [--spawnfix-smx PATH] [--models-smx PATH] [--out DIR]
   python tools/package.py navs <version> <nav-dir> [--out DIR]
 
 plugin: addons/metamod/pf2nextbot.vdf, addons/pf2nextbot/bin/<binary>, addons/pf2nextbot/data/*.cfg,
@@ -33,8 +33,9 @@ def plugin(args):
     binary = opt(args, "--binary", os.path.join(ROOT, "build", BINARY[plat]))
     smx = opt(args, "--smx", os.path.join(ROOT, "build", "pf2_hunted_classrestrict.smx"))
     spawnfix = opt(args, "--spawnfix-smx", os.path.join(ROOT, "build", "pf2_spawnfix.smx"))
+    models = opt(args, "--models-smx", os.path.join(ROOT, "build", "pf2_hunted_models.smx"))
     out = opt(args, "--out", os.path.join(ROOT, "dist"))
-    for p in (binary, smx, spawnfix):
+    for p in (binary, smx, spawnfix, models):
         if not os.path.isfile(p):
             sys.exit("missing " + p)
     os.makedirs(out, exist_ok=True)
@@ -48,6 +49,7 @@ def plugin(args):
             add(z, f, "addons/pf2nextbot/data/" + os.path.basename(f))
         add(z, smx, "addons/sourcemod/plugins/pf2_hunted_classrestrict.smx")
         add(z, spawnfix, "addons/sourcemod/plugins/pf2_spawnfix.smx")
+        add(z, models, "addons/sourcemod/plugins/pf2_hunted_models.smx")
         add(z, os.path.join(ROOT, "sourcemod", "configs", "hunted_classrestrict.cfg"),
             "addons/sourcemod/configs/hunted_classrestrict.cfg")
         add(z, os.path.join(ROOT, "package", "cfg", "pf2nextbot.example.cfg"), "cfg/pf2nextbot.example.cfg")
