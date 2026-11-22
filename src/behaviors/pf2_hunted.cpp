@@ -201,6 +201,7 @@ Action<CTFBot> *PF2Hunted_ScenarioAction(CTFBot *me)
 	return new CTFBotPF2HuntedBodyguard;
 }
 
+static bool HuntedAllies(int a, int b) { return a == b; }   // bodyguards may be on an allied team (FF)
 static int HuntedVipTeam() { return TF_TEAM_BLUE; }
 
 // ---------------------------------------------------------------------------------------------
@@ -236,7 +237,10 @@ static CTFPlayer *NearestBodyguard(CTFBot *me, float *dist)
 	for (int i = 1; i <= gpGlobals->maxClients; ++i)
 	{
 		CTFPlayer *p = ToTFPlayer(UTIL_PlayerByIndex(i));
-		if (!p || p == me || !p->IsAlive() || p->GetTeamNumber() != me->GetTeamNumber() || p->IsPlayerClass(TF_CLASS_CIVILIAN))
+		if (!p || p == me || !p->IsAlive() || !HuntedAllies(p->GetTeamNumber(), me->GetTeamNumber()) || p->IsPlayerClass(TF_CLASS_CIVILIAN))
+			continue;
+		// classes that hold a position (building, sniping, sneaking) are not who the VIP moves with
+		if (p->IsPlayerClass(TF_CLASS_ENGINEER) || p->IsPlayerClass(TF_CLASS_SNIPER) || p->IsPlayerClass(TF_CLASS_SPY))
 			continue;
 		float d = (p->GetAbsOrigin() - me->GetAbsOrigin()).Length();
 		if (d < bestD)
@@ -481,6 +485,23 @@ ActionResult<CTFBot> CTFBotPF2HuntedVIP::Update(CTFBot *me, float interval)
 	}
 	else if (!ahead)
 		m_regroupWait.Invalidate();
+	// careful like TF2 Classic's VIP bot: hurt just now and below 80%, or an enemy within 750 units with a
+	// clear line of fire - fall back to the nearest bodyguard instead of pressing on alone
+	bool danger = me->GetHealth() < me->GetMaxHealth() * 0.8f && me->GetTimeSinceLastInjury() < 1.0f;
+	if (const CKnownEntity *threat = me->GetVisionInterface()->GetPrimaryKnownThreat(true))
+		if (threat->GetEntity() && me->IsRangeLessThan(threat->GetEntity(), 750.0f) && me->IsLineOfFireClear(threat->GetEntity()))
+			danger = true;
+	if (danger && guard && guardDist > 150.0f)
+	{
+		if (m_repathTimer.IsElapsed())
+		{
+			m_repathTimer.Start(0.5f);
+			CTFBotPathCost cost(me, FASTEST_ROUTE);
+			m_path.Compute(me, guard->GetAbsOrigin(), cost);
+		}
+		m_path.Update(me);
+		return Continue();
+	}
 	if (m_repathTimer.IsElapsed())
 	{
 		m_repathTimer.Start(1.0f);
