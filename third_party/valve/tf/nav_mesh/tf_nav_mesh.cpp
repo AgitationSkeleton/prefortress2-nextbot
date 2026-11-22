@@ -739,7 +739,9 @@ void CTFNavMesh::ComputeBlockedAreas( void )
 	CFuncBrush *brush = NULL;
 	while( ( brush = (CFuncBrush *)gEntList.FindEntityByClassname( brush, "func_brush" ) ) != NULL )
 	{
-		if ( brush->IsSolid() ) // && !brush->m_iDisabled )  // "disabled" seems to be overridden by solidity
+		// PF2NB: Solidity "never" brushes are visual only (FF resupply forcefields: ff_hellion_classic_b3's
+		// red spawn exit was blocked for every team); the game does not always flag them FSOLID_NOT_SOLID
+		if ( brush->IsSolid() && brush->m_iSolidity != CFuncBrush::BRUSHSOLID_NEVER ) // && !brush->m_iDisabled )  // "disabled" seems to be overridden by solidity
 		{
 			// this brush is potentially blocking navigation
 			TestAndBlockOverlappingAreas( brush );

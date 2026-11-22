@@ -78,4 +78,6 @@ private:
 	Vector m_spot;
 	bool m_haveSpot = false;
 	bool m_arrived = false;
+	Vector m_spawnPos;   // where this life started: no vantage points near it
+	int m_misses = 0;    // unreachable spots in a row
 };

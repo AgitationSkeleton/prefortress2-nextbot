@@ -380,6 +380,15 @@ void CNavLadder::ConnectGeneratedLadder( float maxHeightAboveTopArea )
 	AddDirectionVector( &center, m_dir, HalfHumanWidth );
 
 	m_bottomArea = TheNavMesh->GetNearestNavArea( center, true );
+	// PF2NB: GetNearestNavArea has no range: with no area at the ladder's foot (ff_hunted's ladder 6, foot
+	// unmeshed) it linked an area 370 units away and 250 higher - bots there walked into a wall to "climb".
+	if ( m_bottomArea )
+	{
+		Vector close;
+		m_bottomArea->GetClosestPointOnArea( center, &close );
+		if ( ( close - center ).AsVector2D().IsLengthGreaterThan( 100.0f ) || fabs( close.z - m_bottom.z ) > 64.0f )
+			m_bottomArea = NULL;
+	}
 	if (!m_bottomArea)
 	{
 		DevMsg( "ERROR: Unconnected ladder bottom at ( %g, %g, %g )\n", m_bottom.x, m_bottom.y, m_bottom.z );

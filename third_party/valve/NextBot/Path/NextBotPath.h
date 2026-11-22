@@ -242,7 +242,9 @@ public:
 			m_path[ count ].type = ON_GROUND;
 		}
 
-		if ( pathResult || includeGoalIfPathFails )
+		// PF2NB: a failed search ends at the closest area; appending a goal far beyond it walks the bot
+		// straight into whatever separates them (snipers ran into their spawn's wall toward an unreachable spot)
+		if ( pathResult || ( includeGoalIfPathFails && ( subjectPos - closestArea->GetCenter() ).AsVector2D().IsLengthLessThan( 300.0f ) ) )
 		{
 			// append actual subject position
 			m_path[ m_segmentCount ].area = closestArea;
@@ -379,7 +381,9 @@ public:
 			m_path[ count ].type = ON_GROUND;
 		}
 
-		if ( pathResult || includeGoalIfPathFails )
+		// PF2NB: a failed search ends at the closest area; appending a goal far beyond it walks the bot
+		// straight into whatever separates them (snipers ran into their spawn's wall toward an unreachable spot)
+		if ( pathResult || ( includeGoalIfPathFails && ( pathEndPosition - closestArea->GetCenter() ).AsVector2D().IsLengthLessThan( 300.0f ) ) )
 		{
 			// append actual goal position
 			m_path[ m_segmentCount ].area = closestArea;

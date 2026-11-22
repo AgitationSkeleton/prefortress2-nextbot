@@ -1,6 +1,8 @@
 // pf2-nextbot: PF2 hunted/VIP maps and per-map ladders. See pf2_hunted.h.
 #include "cbase.h"
 #include "pf2_hunted.h"
+#include "nav_pathfind.h"
+#include "tf_nav_area.h"
 #include "bot/behavior/sniper/tf_bot_sniper_attack.h"
 #include "nav_mesh.h"
 #include "nav_ladder.h"
@@ -256,11 +258,25 @@ bool CTFBotHuntedSniper::PickSpot(CTFBot *me)
 	Vector anchor = (vip && vip->IsAlive()) ? vip->GetAbsOrigin() : GoalPoint();
 	CNavArea *anchorArea = TheNavMesh->GetNearestNavArea(anchor, false, 500.0f);
 	CNavArea *fallback = NULL;
-	for (int tries = 0; tries < 60 && TheNavAreas.Count(); ++tries)
+	// candidates: areas reachable from here (walking the mesh outward), so a chosen spot can always be
+	// reached - random areas were often unreachable (other teams' spawns, enclosed perches)
+	CUtlVector<CNavArea *> reach;
+	if (CNavArea *start = me->GetLastKnownArea())
+		CollectSurroundingAreas(&reach, start, 5000.0f, StepHeight, 300.0f);
+	// (a spawn whose way out is a long drop or a ladder - hunted sniper perches - gives no candidates:
+	// then sample the whole mesh; misses there lead to a spell of roaming, see Update)
+	bool useReach = reach.Count() > 0;
+	for (int tries = 0; tries < 160 && (reach.Count() || TheNavAreas.Count()); ++tries)
 	{
-		CNavArea *a = TheNavAreas[RandomInt(0, TheNavAreas.Count() - 1)];
+		if (useReach && tries == 80)
+			useReach = false;   // nothing suitable within reach: try the whole mesh
+		CNavArea *a = useReach ? reach[RandomInt(0, reach.Count() - 1)] : TheNavAreas[RandomInt(0, TheNavAreas.Count() - 1)];
 		if (a->IsBlocked(me->GetTeamNumber()) || a->IsUnderwater())
 			continue;
+		if (((CTFNavArea *)a)->HasAttributeTF(TF_NAV_SPAWN_ROOM_RED | TF_NAV_SPAWN_ROOM_BLUE))
+			continue;   // never a vantage point inside a spawn room
+		if ((a->GetCenter() - m_spawnPos).IsLengthLessThan(600.0f))
+			continue;   // nor next to where we spawned (FF's yellow spawns carry no spawn room flag)
 		float d = (a->GetCenter() - anchor).Length();
 		if (d < 700.0f || d > 1800.0f)
 			continue;
@@ -280,6 +296,7 @@ bool CTFBotHuntedSniper::PickSpot(CTFBot *me)
 
 ActionResult<CTFBot> CTFBotHuntedSniper::OnStart(CTFBot *me, Action<CTFBot> *priorAction)
 {
+	m_spawnPos = me->GetAbsOrigin();
 	m_path.SetMinLookAheadDistance(me->GetDesiredPathLookAheadRange());
 	m_haveSpot = false;
 	m_arrived = false;
@@ -290,8 +307,10 @@ ActionResult<CTFBot> CTFBotHuntedSniper::Update(CTFBot *me, float interval)
 {
 	if (!s_rules.active || !s_rules.hasGoal)
 		return Done("Not a hunted map");
-	// a target in sight: TFBot's sniper attack (zoom, aim, fire), then back to roaming
-	if (CTFBotSniperAttack::IsPossible(me))
+	// a target in sight at our vantage point: TFBot's sniper attack (zoom, aim, fire), then back to
+	// roaming. Not on the way there: targets are often visible from the spawn, and the attack would
+	// keep the sniper zoomed in at the spawn (the main action still fires while we move)
+	if (m_haveSpot && m_arrived && CTFBotSniperAttack::IsPossible(me))
 		return SuspendFor(new CTFBotSniperAttack, "Sniping a target");
 	if (!m_haveSpot || (m_arrived && m_holdTimer.IsElapsed()) || (!m_arrived && m_travelTimer.IsElapsed()))
 	{
@@ -300,7 +319,14 @@ ActionResult<CTFBot> CTFBotHuntedSniper::Update(CTFBot *me, float interval)
 		m_travelTimer.Start(25.0f);
 		m_repathTimer.Invalidate();
 		if (!m_haveSpot)
+		{
+			if (++m_misses >= 6)
+			{
+				m_misses = 0;
+				return SuspendFor(new CTFBotSeekAndDestroy(15.0f), "No vantage point found; roaming for a while");
+			}
 			return Continue();
+		}
 	}
 	if (!m_arrived)
 	{
@@ -316,7 +342,19 @@ ActionResult<CTFBot> CTFBotHuntedSniper::Update(CTFBot *me, float interval)
 				m_repathTimer.Start(RandomFloat(1.0f, 2.0f));
 				CTFBotPathCost cost(me, FASTEST_ROUTE);
 				if (!m_path.Compute(me, m_spot, cost))
-					m_haveSpot = false;   // unreachable: pick another next time
+				{
+					// unreachable: don't follow the partial path into a wall; try another spot right away, and
+					// after several misses head for the VIP's surroundings (out of an enclosed sniper spawn)
+					m_path.Invalidate();
+					m_haveSpot = false;
+					if (++m_misses >= 6)
+					{
+						m_misses = 0;
+						return SuspendFor(new CTFBotSeekAndDestroy(15.0f), "No reachable vantage point; roaming for a while");
+					}
+					return Continue();
+				}
+				m_misses = 0;
 			}
 			m_path.Update(me);
 			return Continue();
@@ -335,6 +373,23 @@ EventDesiredResult<CTFBot> CTFBotHuntedSniper::OnStuck(CTFBot *me)
 	m_haveSpot = false;
 	return TryContinue();
 }
+
+
+// escort the VIP, but only while the escape is open: after a round reset the gate closes again and
+// the bodyguards must go back to its buttons (a plain CTFBotEscort never ended, so the team stood
+// around the VIP at the spawn and nobody opened the way)
+class CTFBotHuntedEscort : public CTFBotEscort
+{
+public:
+	CTFBotHuntedEscort(CBaseEntity *who) : CTFBotEscort(who) {}
+	virtual ActionResult<CTFBot> Update(CTFBot *me, float interval)
+	{
+		if (!PF2Hunted_GateOpen() && s_rules.buttons.Count() > 0)
+			return Done("The escape closed again");
+		return CTFBotEscort::Update(me, interval);
+	}
+	virtual const char *GetName(void) const { return "HuntedEscort"; }
+};
 
 // ---------------------------------------------------------------------------------------------
 // VIP
@@ -508,7 +563,7 @@ ActionResult<CTFBot> CTFBotPF2HuntedBodyguard::Update(CTFBot *me, float interval
 
 	CTFPlayer *vip = PF2Hunted_FindVIP(TF_TEAM_BLUE);
 	if (vip && vip->IsAlive())
-		return SuspendFor(new CTFBotEscort(vip), "Escorting the VIP");
+		return SuspendFor(new CTFBotHuntedEscort(vip), "Escorting the VIP");
 	return SuspendFor(new CTFBotSeekAndDestroy(10.0f), "No VIP to escort; hunting assassins");
 }
 
