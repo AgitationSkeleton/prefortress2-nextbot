@@ -156,13 +156,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.v.outputs.tag }}
         run: |
-          cat > notes.md <<'EOF'
+          cat > install.md <<'EOF'
           Drop-in zips for the PF2 game directory (`pf2/`). Needs Metamod:Source 1.11/1.12 on the server.
           Nav meshes for PF2's maps are a separate download (`prefortress2-nextbot-navmeshes-*.zip`, attached to the first release).
           The Linux build has not been run on a Linux PF2 server yet; see the README "Known gaps".
           EOF
+          # patch notes for this tag (docs/releases/<tag>.md), then the install notes
+          if [ -f "docs/releases/$TAG.md" ]; then
+            { cat "docs/releases/$TAG.md"; echo; echo '---'; echo; cat install.md; } > notes.md
+          else
+            cp install.md notes.md
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/*.zip --clobber
+            gh release edit "$TAG" --notes-file notes.md
           else
             gh release create "$TAG" dist/*.zip --title "$TAG" --notes-file notes.md --target "$GITHUB_SHA"
           fi
