@@ -733,7 +733,26 @@ CON_COMMAND(pf2nb_nav_generate, "Generate a nav mesh seeded from all team spawns
 			++seeds;
 		}
 	}
-	Msg("[PF2NB] %d walkable seeds from player spawns; generating\n", seeds);
+	// objectives and pickups too: a flag room nothing walkable connects to from a spawn the way the
+	// generator samples (ctf_well_classic_b2's raised flag rooms) is otherwise left without a mesh
+	int objSeeds = 0;
+	const char *objClasses[] = { "item_teamflag", "func_capturezone", "trigger_capture_area", "item_healthkit*", "item_ammopack*" };
+	for (const char *cn : objClasses)
+		for (CBaseEntity *e = gEntList.FindEntityByClassname(NULL, cn); e; e = gEntList.FindEntityByClassname(e, cn))
+		{
+			Vector pos = e->WorldSpaceCenter();
+			pos.x = TheNavMesh->SnapToGrid(pos.x);
+			pos.y = TheNavMesh->SnapToGrid(pos.y);
+			Vector normal;
+			pos.z += HalfHumanHeight;
+			if (TheNavMesh->GetGroundHeight(pos, &pos.z, &normal) && normal.z > 0.7f)
+			{
+				TheNavMesh->AddWalkableSeed(pos, normal);
+				++objSeeds;
+			}
+		}
+	seeds += objSeeds;
+	Msg("[PF2NB] %d walkable seeds from player spawns, objectives and pickups (%d objective/pickup); generating\n", seeds, objSeeds);
 	if (seeds)
 		TheNavMesh->BeginGeneration(false);
 }

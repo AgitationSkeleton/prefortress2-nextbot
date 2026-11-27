@@ -83,6 +83,18 @@ types were re-derived from the binaries (see `src/shim/tf_shareddefs.h`).
   Stonehenge 2, ctf_2fort 4, hunted_actually_accurate_a1 1, plr_chariots 22, plr_pipeline_pf2 16.
 * `pf2nb_path <bot>`: the bot's current path segments (area, position, ground/drop/climb/ladder).
 * The released nav pack covers 163 of PF2's 164 maps (all but the `background01` menu backdrop).
+* Gap stitching (`pf2nb_stitch_gaps`, `pf2nb_stitches`): at map load, facing areas up to ~2 generation cells apart
+  with nothing else covering the gap are linked when the floor across is continuous (no rise between 8-unit samples
+  taller than a step: steps, stairs and ramps, not ledges) and a hull fits. The generator drops samples that land on
+  stair risers: bam4's spiral stairs cut both spawns off (bots reached 13% of the mesh, every flag fetcher stood in
+  spawn); pl_jungle_a1c's ship-hold stairs trapped BLU's hold spawns. Typical counts: bam4 128, pl_jungle 296.
+* Teleporter links (`tf_bot_pf2_teleports`, `pf2nb_teleports`): each `trigger_teleport` for clients gets one-way links
+  from the areas inside it to the area at its destination (or the mesh beneath it). The path cost charges a fixed
+  cost and honours the trigger's team/filter and enabled state (rechecked each second; triggers are found again by
+  position because round restarts recreate them); the path walks into the trigger. plr_highertower's Civilian spawn
+  room (exit: a teleporter) kept Civilians there all round; cp_chaoscanyon_a7 went from 0% to 97% reachable.
+* `pf2nb_reach`: from each team's spawns, which flags / control points the mesh (with stitches, teleporters,
+  ladders) reaches. `pf2nb_nav_generate` also seeds from flags, capture zones/areas and pickups.
 
 ## Linux
 
@@ -107,6 +119,9 @@ Linux `server.so`. It has **not** been run on a Linux PF2 server yet; difference
 | Stonehenge (`hunted_stonehenge_test`) | see the hunted table |
 | Payload path progress | `CTeamTrainWatcher` path projection is approximated by the cart position |
 | Linux | built, not yet run on a server (see above) |
+| Lift-only rooms | func_door/func_movelinear lifts are not nav links: ctf_well_classic_b2 / ctf_well_tfc_port_final flag rooms are reachable only by lifts, so bots cannot take those flags |
+| Unconnected meshes (offline audit) | plr_pinecrest_pf2, plr_pipeline_pf2, pl_cactuscanyon_pf2, ctf_minecraft_island_final, ctf_donutlandv1 (BLU), ctf_haste_tfc_beta1 (BLU), rock2_b1_pf2, congestus_tfc_b2, ad_ksour_pf2/ad_ksweet_v1 (cp_1, cp_4) still have objectives no spawn reaches |
+| Hot-reload crash | `meta unload/load` of the plugin followed by a changelevel crashes in engine/SourceMod (`SetInWaitingForPlayers`); restart the server instead of hot reloading |
 
 ## Soak results (Windows)
 

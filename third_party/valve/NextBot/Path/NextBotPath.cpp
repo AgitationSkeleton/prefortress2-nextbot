@@ -40,6 +40,9 @@ Path::Path( void )
 /**
  * Determine actual path positions
  */
+// PF2NB: map teleporter links (core/teleports.cpp)
+bool PF2NB_TeleportEntry( const CNavArea *from, const CNavArea *to, Vector *enter );
+
 bool Path::ComputePathDetails( INextBot *bot, const Vector &start )
 {
 	VPROF_BUDGET( "Path::ComputePathDetails", "NextBot" );
@@ -75,7 +78,18 @@ bool Path::ComputePathDetails( INextBot *bot, const Vector &start )
 		Segment *from = &m_path[ i-1 ];
 		Segment *to = &m_path[ i ];
 		
-		if ( to->how <= GO_WEST )		// walk along the floor to the next area
+		Vector teleEnter;
+		if ( to->how <= GO_WEST && PF2NB_TeleportEntry( from->area, to->area, &teleEnter ) )
+		{
+			// PF2NB: a map teleporter (core/teleports.cpp): walk into the trigger on this floor; it carries
+			// the bot to the next area. No drop/gap/climb handling for this step.
+			to->ladder = NULL;
+			to->pos = teleEnter;
+			to->type = ON_GROUND;
+			to->m_portalCenter = teleEnter;
+			to->m_portalHalfWidth = 16.0f;
+		}
+		else if ( to->how <= GO_WEST )		// walk along the floor to the next area
 		{
 			to->ladder = NULL;
 
@@ -264,6 +278,12 @@ bool Path::ComputePathDetails( INextBot *bot, const Vector &start )
 		
 		if ( to->how > GO_WEST || !to->type == ON_GROUND )
 			continue;
+
+		{	// PF2NB: a map teleporter step is not a gap or a ledge
+			Vector teleEnter;
+			if ( PF2NB_TeleportEntry( from->area, to->area, &teleEnter ) )
+				continue;
+		}
 
 		// if areas are separated, we may need to 'gap jump' between them
 		// add a node to minimize the jump distance

@@ -29,7 +29,11 @@ void PF2NB_StartStats();
 void PF2NB_DoorsFrame();
 void PF2NB_DoorsReset();
 void PF2NB_PruneDrops();
+void PF2NB_AddTeleportLinks();
+void PF2NB_StitchGaps();
+void PF2NB_StitchReset();
 void PF2NB_ForgetDrops();
+void PF2NB_TeleportsReset();
 void PF2_RefreshControlPointMasters();
 void PF2NB_HazardsFrame();
 void PF2NB_HazardsReset();
@@ -498,6 +502,8 @@ void BotManager_OnServerActivate()
 			TheNavMesh->OnServerActivate();
 			PF2Hunted_LoadForMap(STRING(gpGlobals->mapname));
 			::PF2NB_PruneDrops();   // after the per-map ladders are in
+			::PF2NB_StitchGaps();      // after the pruning: its links are checked here
+			::PF2NB_AddTeleportLinks();
 		}
 		PF2NB_Log("nav mesh for %s: %s (%d areas)", STRING(gpGlobals->mapname), s_navLoaded ? "loaded" : "NOT AVAILABLE, bots disabled on this map",
 			s_navLoaded ? TheNavMesh->GetNavAreaCount() : 0);
@@ -533,6 +539,8 @@ void BotManager_OnLevelShutdown()
 	::PF2NB_DoorsReset();
 	::PF2NB_HazardsReset();
 	::PF2NB_ForgetDrops();
+	::PF2NB_TeleportsReset();
+	::PF2NB_StitchReset();
 	ResetClassLearning();
 	PF2_ResetProxies();
 	if (TheNavMesh)
@@ -560,6 +568,8 @@ void BotManager_OnGameFrame(bool simulating)
 		::PF2NB_DoorsReset();
 		::PF2NB_HazardsReset();
 		::PF2NB_ForgetDrops();
+		::PF2NB_TeleportsReset();
+		::PF2NB_StitchReset();
 		// keep the generator stepping even with no mesh loaded (s_navLoaded false) or no bots (not simulating)
 		PF2_InvalidateEntityCache();
 		TheNavMesh->Update();

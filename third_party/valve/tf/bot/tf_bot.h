@@ -904,6 +904,8 @@ inline const CTFBot *ToTFBot( const CBaseEntity *pEntity )
  */
 // PF2NB: mesh connections bots got stuck on (core/botmanager.cpp)
 bool PF2NB_IsBadConnection( const CNavArea *from, const CNavArea *to, int team );
+// PF2NB: trigger_teleport nav links (core/teleports.cpp): < 0 not one, -2 not for this team, else cost
+float PF2NB_TeleportLinkCost( const CNavArea *from, const CNavArea *to, int team );
 
 class CTFBotPathCost : public IPathCost
 {
@@ -940,6 +942,15 @@ public:
 			if ( PF2NB_IsBadConnection( fromArea, baseArea, m_me->GetTeamNumber() ) )
 			{
 				return -1.0f;
+			}
+
+			// PF2NB: a map teleporter: a fixed cost, none of the walking height checks below
+			{
+				float tele = PF2NB_TeleportLinkCost( fromArea, baseArea, m_me->GetTeamNumber() );
+				if ( tele == -2.0f )
+					return -1.0f;
+				if ( tele >= 0.0f )
+					return tele + fromArea->GetCostSoFar();
 			}
 
 			// in training, avoid capturing the point until the human trainee does so
